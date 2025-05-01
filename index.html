@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3D Blackjack Game</title>
+<style>
+  body { margin: 0; overflow: hidden; background: url('https://images.unsplash.com/photo-1587595431973-160d0d88eaf4?crop=entropy&cs=tinysrgb&fit=crop&h=1080&q=80&w=1920') no-repeat center center fixed; background-size: cover; }
+  #ui {
+    position: absolute; top: 10px; left: 10px; color: white; z-index: 10;
+  }
+  button { margin: 5px; padding: 10px; font-size: 16px; }
+  #status {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.7);
+    padding: 20px;
+    border-radius: 10px;
+    font-family: 'Trebuchet MS', sans-serif;
+    font-size: 26px;
+    color: white;
+    text-align: center;
+  }
+  #scoreboard {
+    position: absolute; top: 10px; right: 10px; color: white; font-size: 16px; z-index: 10; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  <button id="hit">Hit</button>
+  <button id="stand">Stand</button>
+</div>
+<div id="status"></div>
+<div id="scoreboard">Player Wins: 0<br>Dealer Wins: 0</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+camera.position.set(0, 5, 8);
+camera.lookAt(0, 0, 0);
+
+const tableGeometry = new THREE.CircleGeometry(5, 64);
+const tableMaterial = new THREE.MeshPhongMaterial({ color: 0x006400 });
+const table = new THREE.Mesh(tableGeometry, tableMaterial);
+table.rotation.x = -Math.PI/2;
+scene.add(table);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambientLight);
+const pointLight = new THREE.PointLight(0xffffff, 0.8);
+pointLight.position.set(0, 10, 0);
+scene.add(pointLight);
+
+const cardTexture = new THREE.TextureLoader().load('https://upload.wikimedia.org/wikipedia/commons/thumb/5/57/Playing_card_back_05.svg/512px-Playing_card_back_05.svg.png');
+const cardMaterial = new THREE.MeshBasicMaterial({ map: cardTexture });
+
+const deckGeometry = new THREE.BoxGeometry(1, 0.5, 1.5);
+const deckMaterial = new THREE.MeshPhongMaterial({ map: cardTexture });
+const deckMesh = new THREE.Mesh(deckGeometry, deckMaterial);
+deckMesh.position.set(6, 0.25, 0);
+scene.add(deckMesh);
+
+let playerWins = 0, dealerWins = 0;
+function updateScoreboard() {
+  document.getElementById('scoreboard').innerHTML = `Player Wins: ${playerWins}<br>Dealer Wins: ${dealerWins}`;
+}
+
+function drawRoundedCard(ctx, text) {
+  const radius = 20;
+  const w = ctx.canvas.width;
+  const h = ctx.canvas.height;
+  ctx.fillStyle = 'white';
+  ctx.strokeStyle = 'black';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(radius, 0);
+  ctx.lineTo(w - radius, 0);
+  ctx.quadraticCurveTo(w, 0, w, radius);
+  ctx.lineTo(w, h - radius);
+  ctx.quadraticCurveTo(w, h, w - radius, h);
+  ctx.lineTo(radius, h);
+  ctx.quadraticCurveTo(0, h, 0, h - radius);
+  ctx.lineTo(0, radius);
+  ctx.quadraticCurveTo(0, 0, radius, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'black';
+  ctx.font = '48px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, w / 2, h / 2);
+}
+
+function createCard(x, z, isFaceUp, valueText) {
+  const geometry = new THREE.PlaneGeometry(1, 1.5);
+  const material = cardMaterial.clone();
+  const card = new THREE.Mesh(geometry, material);
+  card.rotation.x = -Math.PI/2;
+  card.position.set(x, 0.01, z);
+
+  if (isFaceUp && valueText) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 384;
+    const ctx = canvas.getContext('2d');
+    drawRoundedCard(ctx, valueText);
+    const tex = new THREE.CanvasTexture(canvas);
+    card.material = new THREE.MeshBasicMaterial({ map: tex });
+  }
+
+  scene.add(card);
+  return card;
+}
+
+const suits = ['♠','♥','♦','♣'];
+const ranks = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+let deck = [];
+function shuffleDeck() {
+  deck = [];
+  for (let s of suits) {
+    for (let r of ranks) {
+      deck.push({rank: r, suit: s});
+    }
+  }
+  deck = deck.sort(() => Math.random() - 0.5);
+}
+function cardValue(card) {
+  if (['J','Q','K'].includes(card.rank)) return 10;
+  if (card.rank === 'A') return 11;
+  return parseInt(card.rank);
+}
+function handValue(hand) {
+  let total = hand.reduce((sum, c) => sum + cardValue(c), 0);
+  let aces = hand.filter(c => c.rank === 'A').length;
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return total;
+}
+
+let playerHand = [], dealerHand = [];
+let playerCards = [], dealerCards = [];
+
+function clearCards() {
+  playerCards.forEach(c => scene.remove(c));
+  dealerCards.forEach(c => scene.remove(c));
+  playerCards = [];
+  dealerCards = [];
+}
+
+function animateDealCard(targetX, targetZ, hand, cards, faceUp = true) {
+  const card = deck.pop();
+  hand.push(card);
+  const mesh = createCard(deckMesh.position.x, deckMesh.position.z, faceUp, faceUp ? card.rank + card.suit : null);
+  cards.push(mesh);
+
+  const duration = 500;
+  const startTime = Date.now();
+  const startX = mesh.position.x;
+  const startZ = mesh.position.z;
+
+  function animate() {
+    const elapsed = Date.now() - startTime;
+    const t = Math.min(elapsed / duration, 1);
+    mesh.position.x = startX + (targetX - startX) * t;
+    mesh.position.z = startZ + (targetZ - startZ) * t;
+    if (t < 1) requestAnimationFrame(animate);
+  }
+  animate();
+}
+
+function resetGame() {
+  document.getElementById('status').innerText = 'Loading next hand...';
+  setTimeout(() => {
+    clearCards();
+    playerHand = [];
+    dealerHand = [];
+    shuffleDeck();
+
+    animateDealCard(-1.5, 2, playerHand, playerCards, true);
+    animateDealCard(-1.5, -2, dealerHand, dealerCards, false);
+    animateDealCard(1.5, 2, playerHand, playerCards, true);
+    animateDealCard(1.5, -2, dealerHand, dealerCards, true);
+
+    setTimeout(() => {
+      updateStatus();
+    }, 1000);
+
+  }, 1000);
+}
+
+function updateStatus(extra = '') {
+  const pVal = handValue(playerHand);
+  const dVal = handValue(dealerHand);
+  let statusText = `Player: ${pVal} Dealer: ${dVal}`;
+  if (extra) statusText += `\n${extra}`;
+  document.getElementById('status').innerText = statusText;
+}
+
+function dealerTurn() {
+  const card = dealerHand[0];
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 384;
+  const ctx = canvas.getContext('2d');
+  drawRoundedCard(ctx, card.rank + card.suit);
+  const tex = new THREE.CanvasTexture(canvas);
+  dealerCards[0].material = new THREE.MeshBasicMaterial({ map: tex });
+
+  let dVal = handValue(dealerHand);
+  function dealerDraw() {
+    if (dVal < 17) {
+      const x = dealerCards.length * 1.2 - 1.5;
+      animateDealCard(x, -2, dealerHand, dealerCards, true);
+      dVal = handValue(dealerHand);
+      setTimeout(dealerDraw, 600);
+    } else {
+      const pVal = handValue(playerHand);
+      let result = '';
+      if (dVal > 21 || pVal > dVal) { result = 'You win!'; playerWins++; }
+      else if (pVal < dVal) { result = 'Dealer wins!'; dealerWins++; }
+      else result = 'Push!';
+
+      updateStatus(result);
+      updateScoreboard();
+      setTimeout(resetGame, 3000);
+    }
+  }
+  dealerDraw();
+}
+
+document.getElementById('hit').onclick = () => {
+  const x = playerCards.length * 1.2 - 1.5;
+  animateDealCard(x, 2, playerHand, playerCards, true);
+  setTimeout(() => {
+    const val = handValue(playerHand);
+    if (val > 21) {
+      updateStatus('Bust! Dealer wins!');
+      dealerWins++;
+      updateScoreboard();
+      setTimeout(resetGame, 3000);
+    } else {
+      updateStatus();
+    }
+  }, 600);
+};
+
+document.getElementById('stand').onclick = () => {
+  dealerTurn();
+};
+
+resetGame();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
